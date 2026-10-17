@@ -10,7 +10,7 @@
     <SelfContained>false</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
 
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Product>P5SHighFps</Product>
     <AssemblyTitle>Persona 5 Strikers high frame rate patcher</AssemblyTitle>
     <Company></Company>

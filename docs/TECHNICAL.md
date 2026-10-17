@@ -27,6 +27,21 @@ Systems convert the divisor to float (`cvtsi2ss`) to get a step in 1/60 s ticks,
    - `153F5F`, `153F86`: twins of `152F94` / `152FBC` in the cable slide (zipline) update, also missing from the
      cheat table; with integer ticks the character fell off the cable about one time in three.
 
+   Left out on purpose (found by live bisection): replacing `cvtsi2ss` by the step is only valid when the converted
+   value is the plain divisor.
+   - **Gauges** (`700254`, `7002CE`, `704EC4`, `704F3E`, `7061D4`, `70624E`, `6FE764`, `6FE7DE`, and the unpatched twins
+     `6FAAF4`, `6FAB72`): HP/SP counters move toward their target with `rate = max(gap / duration, floor)`, the rate is
+     computed once (while it is 0), then `value = (int)(value + rate)` on every update. A floor below 1 (a step of 0.5,
+     or a divisor of 0 every other frame) leaves a rate that never moves the gauge: the in-game HP/SP counter stayed
+     behind the real value after a fight (the menu was right). Their divisor reads (`70024A`, `7002C4`, `704EBA`,
+     `704F34`, `7061CA`, `706244`, `6FAAEA`, `6FAB68`, `6FE75A`, `6FE7D4`) are redirected to the getter returning 1,
+     as at 60 FPS; the gauges animate slightly faster, cosmetic only.
+   - **Enemy detection** (`2E6C20`, `2E6C88`): `imul eax, rate` runs between the getter and the conversion. The constant
+     dropped the multiplication, the detection gauge filled far too slowly and enemies never ambushed the player.
+   - **A counter, not the divisor** (`6DBC9E`): converts `min(counter + divisor, limit)`.
+
+   Unpatched, they follow the integer tick sequence (1, 0, 1, 0...), which is correct on average.
+
    `SetFrameRate` is redirected so the divisor stays 1 and the cap stays at the target.
 2. **Relocated `.trace` sites**: see above.
 3. **Seconds-per-frame helper** (`20FCCE`).
@@ -41,6 +56,7 @@ Systems convert the divisor to float (`cvtsi2ss`) to get a step in 1/60 s ticks,
    - integer divisions by the divisor: `16AD9E`, `16ADA8`, `16AE7D`, `16AE87`, `188B94`, `188C2C`, `188E6E`,
      `188FF2`, `18908D`, `2F4F0B`, `2F4F24`, `2BD65BE`, `2BD6629`;
    - float divisions by a value proportional to it: `14C74E`, `1B0405`, `1FB8AE`, `3C2025`;
+   - gauge floors (HP/SP counters, see above): `70024A`, `7002C4`, `704EBA`, `704F34`, `7061CA`, `706244`, `6FAAEA`, `6FAB68`, `6FE75A`, `6FE7D4`;
    - one-time UI animation speed setup: `6B8C2E`, `7719D3`, `771E43`;
    - a loop that samples a curve with `t += divisor` until `t` reaches its end (Morgana's van summon): `147CF6`.
      With 0 the loop never ends and the game freezes;
@@ -57,7 +73,7 @@ Systems convert the divisor to float (`cvtsi2ss`) to get a step in 1/60 s ticks,
    snapping branch for those motions; longer motions are untouched and stay smooth. Found by bisecting the step
    sites live (`206880`, the per-unit update, receives the step), then logging the vtable calls of the affected unit.
 
-About 53 other floating-point conversions of the divisor are left alone; with integer ticks they receive 1/0
+About 64 other floating-point conversions of the divisor are left alone; with integer ticks they receive 1/0
 alternately, which is correct on average. They were not patched by the cheat table either.
 
 ## Code cave

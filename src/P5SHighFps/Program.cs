@@ -25,7 +25,7 @@ using P5SHighFps.Native;
 using P5SHighFps.Patching;
 using P5SHighFps.UI;
 
-const string Version = "1.0.0";
+const string Version = "1.0.1";
 
 AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 {

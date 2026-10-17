@@ -47,6 +47,19 @@ static class Addresses
     public const long CodeCave = 0x96000;
     public const int CodeCaveSize = 0x400;
 
+    // Deliberately left out, found by bisection. Replacing "cvtsi2ss" by the step is only valid when the converted value
+    // is the plain divisor:
+    //  - 700254, 7002CE, 704EC4, 704F3E, 7061D4, 70624E, 6FE764, 6FE7DE (cheat table) and the unpatched twins 6FAAF4 and
+    //    6FAB72: gauges that move toward their target (HP/SP...) with rate = max(gap / duration, floor), then
+    //    value = (int)(value + rate). The rate is computed once, while it is 0, and the value is truncated to an integer
+    //    on every update: a floor below 1 (0.5, or a divisor of 0 on every other frame) leaves a rate that never moves
+    //    the gauge, so the on-screen HP/SP stayed behind the real value. Their divisor reads are redirected to a getter
+    //    returning 1 (FixedOneSites), the original 60 FPS behaviour: gauges animate a little faster, cosmetic only.
+    //  - 2E6C20, 2E6C88: "imul eax, rate" runs before the conversion (enemy detection gauge). The constant dropped the
+    //    multiplication, the gauge filled far too slowly and enemies never ambushed the player.
+    //  - 6DBC9E: converts a counter (min(counter + divisor, limit)), not the divisor.
+    // Unpatched, they follow the integer tick sequence (1, 0, 1, 0...), which is correct on average.
+
     /// <summary>
     /// "cvtsi2ss xmmN, r64" sites, grouped by destination register.
     /// Based on the "static" variant of zettozoid's cheat table; sites its author found broken are excluded
@@ -55,9 +68,8 @@ static class Addresses
     public static readonly (int Reg, long[] Rvas)[] StepSites =
     [
         (0, [0x5BCD26, 0x18967C, 0x4FC39F, 0x455099, 0x419839, 0x14BE2A, 0x189448,
-             0x3C2033, 0x835E0D, 0x6D70FE, 0x6D708B, 0x6FE7DE, 0x6FE764, 0x1FA410, 0x1AE843,
-             0x6ECAF2, 0x6EE2B5, 0x704F3E, 0x700254, 0x7002CE, 0x6DBC9E, 0x6E5097, 0x6E50D1, 0x6E506B,
-             0x704EC4, 0x70624E, 0x7061D4,
+             0x3C2033, 0x835E0D, 0x6D70FE, 0x6D708B, 0x1FA410, 0x1AE843,
+             0x6ECAF2, 0x6EE2B5, 0x6E5097, 0x6E50D1, 0x6E506B,
              // .trace section sites relocated in v1.03 (the cheat table's 2B55BBC/2B80956/3AA520F do not match)
              0x2BB351C, 0x2BE0236, 0x356C1F6, 0x19597532, 0x1967F748,
              // game.exe+20FCC0 returns divisor * game speed / 60 (seconds per frame), used by UI and portrait animations
@@ -78,7 +90,7 @@ static class Addresses
              // twin of 152FBC, same cable slide update as 153F5F
              0x153F86]),
         (3, [0x1640D9]),
-        (6, [0x4F5B8B, 0x15997F, 0x186B7D, 0x2E6C20, 0x2E6C88]),
+        (6, [0x4F5B8B, 0x15997F, 0x186B7D]),
         (7, [0x3F89FE, 0x444ECF]),
         (8, [0x5C3AFD, 0x4F5BDA]),
         (9, [0x5C3ADF]),
@@ -104,6 +116,10 @@ static class Addresses
         0x147CF6,
         // conversions the cheat table author excluded (enemy spawning, attack particles): original behaviour
         0x135A2D, 0x450D1B, 0x2054D6,
+        // gauge floors (HP/SP...): rate = max(gap / duration, divisor), computed once while the rate is 0. A divisor of 0
+        // (every other frame) leaves a tiny rate for good and the gauge never moves again (see the note on StepSites).
+        // Last four: the getters of 6FE764/6FE7DE and of the twins 6FAAF4/6FAB72.
+        0x70024A, 0x7002C4, 0x704EBA, 0x704F34, 0x7061CA, 0x706244, 0x6FAAEA, 0x6FAB68, 0x6FE75A, 0x6FE7D4,
     ];
 
     /// <summary>

@@ -5,9 +5,7 @@ makes everything run faster. **P5SHighFps** patches the game in memory so it ren
 while gameplay, animations, timers and UI keep their normal speed.
 
 - 120 FPS (configurable) with correct game speed
-- Fixes the side effects older frame unlockers left behind: too-fast eye blinking, too-fast dialogue bubbles and
-  UI animations, integer timers, NPCs disappearing depending on the camera, the Persona model flickering on the
-  Persona screen, falling off zipline cables
+- Fixes what breaks when the frame rate is simply unlocked (full list below)
 - Nothing on disk is modified: it patches memory and verifies every instruction before touching it
 - F8 toggles 120 FPS / original 60 FPS at any time, with an on-screen notification and beeps
 - Starts automatically with the game through Steam launch options
@@ -19,9 +17,22 @@ while gameplay, animations, timers and UI keep their normal speed.
 Same scene, toggled in game with F8. The banner at the top is the patcher's notification; the counter in the top-right
 corner is an external FPS overlay.
 
-Experimental: other targets work in principle (`--fps=N`, 30 to 360). Here at 240 FPS (`--fps=240`), briefly tested:
+Other targets work too (`--fps=N`, 30 to 360). Tested at 120 and 240 FPS; here at 240 FPS (`--fps=240`):
 
 ![Persona 5 Strikers at 240 FPS with P5SHighFps](docs/images/240fps.jpg)
+
+## Fixes included
+
+The game logic is tied to the frame rate, so a plain unlocker breaks many small things. These are fixed:
+
+- Eye blinking at its normal speed (not twice as fast)
+- Dialogue bubbles, exclamation marks and other UI animations at their normal speed
+- NPCs no longer disappear depending on the camera angle
+- Morgana's van summon no longer freezes the game
+- The Persona model no longer flickers or jumps between two positions on the Persona screen
+- Zipline cables: you no longer slide off them
+- The in-game HP/SP counters update after a fight (they used to stay behind the real value until a character switch)
+- Enemies can ambush you again (an enemy next to you no longer just stares at you)
 
 ## Requirements
 
@@ -81,7 +92,7 @@ The game pauses when it loses focus, so keys are read globally while the game wi
 | Option | Effect |
 |---|---|
 | `--auto=SECONDS` | Activate automatically SECONDS after the game starts (otherwise press F8 once in game) |
-| `--fps=N` | Target frame rate, 30 to 360 (default 120). Tested at 120. |
+| `--fps=N` | Target frame rate, 30 to 360 (default 120). Tested at 120 and 240. |
 | `--no-int-ticks` | Disable the integer counter fixes (eye blinking, integer timers); only for troubleshooting |
 | `--now` | Patch immediately when started manually on an already running game |
 | `--diagnostics` | Developer diagnostics on F5/F6/F7 (see [docs/TECHNICAL.md](docs/TECHNICAL.md)) |
@@ -102,10 +113,10 @@ The game pauses when it loses focus, so keys are read globally while the game wi
 A healthy log contains lines like:
 
 ```
-81/81 simulation step sites verified.
+70/70 simulation step sites verified.
 UI fixed-step animations: step scaled.
 Short looping motions: time snapped to whole frames.
-Integer counters: 24/24 calls redirected to a fixed divisor of 1.
+Integer counters: 34/34 calls redirected to a fixed divisor of 1.
 Eye blinking: frame step replaced by the divisor.
 ```
 
