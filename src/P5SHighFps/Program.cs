@@ -13,7 +13,8 @@
 //     rewrites the divisor as whole 1/60 s ticks (1, 0, 1, 0... at 120 FPS), so "counter += divisor" keeps real-time
 //     speed. Callers that must never see 0 (divisions, one-time speed setups) get a getter that always returns 1.
 //  3. Specific fixes found in game: eye blinking, UI animations with a fixed per-update step, a seconds-per-frame helper,
-//     short looping motions (Persona showcase) snapped to whole frames.
+//     short looping motions (Persona showcase) snapped to whole frames, gauge durations scaled by the frame rate,
+//     the lock-on camera dead zone scaled by the step.
 // Every site is checked (expected instruction bytes) before being patched; a site that does not match is skipped.
 
 using System.Diagnostics;
@@ -25,7 +26,7 @@ using P5SHighFps.Native;
 using P5SHighFps.Patching;
 using P5SHighFps.UI;
 
-const string Version = "1.0.1";
+const string Version = "1.1.0";
 
 AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 {
@@ -48,7 +49,7 @@ int Fail(int code, string msg)
 }
 
 Log.Info($"P5SHighFps {Version}: target {options.TargetFps} FPS, simulation step " +
-    $"{options.Step.ToString(CultureInfo.InvariantCulture)} tick/frame, integer counters {(options.IntTicks ? "on" : "off")}" +
+    $"{(60f / options.TargetFps).ToString(CultureInfo.InvariantCulture)} tick/frame, integer counters {(options.IntTicks ? "on" : "off")}" +
     $"{(options.Diagnostics ? ", diagnostics on" : "")}.");
 
 // 1. Game process and version
@@ -61,16 +62,23 @@ long baseAddr = (long)game.MainModule!.BaseAddress;
 if (!GameLauncher.IsSupportedVersion(mem, game, baseAddr))
     return Fail(2, $"ERROR: unsupported game version (expected TimeDateStamp {Addresses.ExpectedTimestamp}, Steam v1.03). No patch applied.");
 
-// 2. Activation: automatic after a delay (Steam launch options), immediate, or on F8
+// 2. Activation: automatic after a delay (Steam launch options), immediate, or on F8 / F9
+int startFps = options.TargetFps;
+int PresetOf(int key) => key == Keyboard.F8 ? Options.PresetF8 : Options.PresetF9;
 if (options.AutoDelay >= 0 && !options.Immediate)
 {
-    Log.Info($"Activating automatically in {options.AutoDelay} s (press F8 to activate now).");
-    if (!Keyboard.WaitOrF8(game, options.AutoDelay)) return 0;
+    Log.Info($"Activating {options.TargetFps} FPS automatically in {options.AutoDelay} s " +
+        $"(F8: {Options.PresetF8} FPS now, F9: {Options.PresetF9} FPS now).");
+    int first = Keyboard.WaitKeyOrTimeout(game, [Keyboard.F8, Keyboard.F9], options.AutoDelay);
+    if (first == 0) return 0;
+    if (first > 0) startFps = PresetOf(first);
 }
 else if (!options.Immediate)
 {
-    Log.Info("Press F8 in game (title screen or later) to activate the patch.");
-    if (Keyboard.WaitKey(game, [Keyboard.F8]) == 0) return 0;
+    Log.Info($"Press F8 ({Options.PresetF8} FPS) or F9 ({Options.PresetF9} FPS) in game (title screen or later) to activate the patch.");
+    int first = Keyboard.WaitKey(game, [Keyboard.F8, Keyboard.F9]);
+    if (first == 0) return 0;
+    startFps = PresetOf(first);
 }
 
 // 3. Checks, then stubs in the code cave
@@ -79,13 +87,15 @@ if (!mem.Read(baseAddr + Addresses.SetFrameRate, Addresses.SetFrameRateOrig.Leng
 var cave = new CodeCave(mem, baseAddr);
 if (!cave.IsEmpty())
     return Fail(4, "ERROR: the code cave is not empty (already patched? restart the game). No patch applied.");
-cave.Write(options.TargetFps, options.Step);
+cave.Write(startFps);
 
 // 4. Patch list (everything is verified before anything is written to game code)
 var builder = new PatchBuilder(mem, baseAddr, cave);
 builder.AddStepSites();
 builder.AddUiFixedStep();
 builder.AddShortMotions();
+builder.AddGaugeDurations();
+builder.AddLockOnCamera();
 if (!builder.AddFrameAnchor(options.IntTicks))
     return Fail(5, "ERROR: the per-frame anchor does not match the expected bytes. No patch applied.");
 if (options.IntTicks)
@@ -94,7 +104,7 @@ if (options.IntTicks)
     if (options.Diagnostics) builder.AddBisectionCandidates();
 }
 
-var patcher = new Patcher(mem, baseAddr, options.TargetFps, builder.Patches, builder.BisectionCandidates);
+var patcher = new Patcher(mem, baseAddr, cave, startFps, builder.Patches, builder.BisectionCandidates);
 Log.Info($"Game state before patching: divisor {patcher.OriginalDivisor}, cap {patcher.OriginalFps} FPS");
 if (patcher.OriginalDivisor != 1)
     Log.Info("WARNING: the game is set to 30 FPS; set it to 60 FPS in the options for consistent results.");
@@ -116,17 +126,19 @@ void LogFrameRate()
 
 // 6. Apply, then react to keys until the game exits
 patcher.Apply(true);
-feedback.PatchState(true, options.TargetFps);
-Log.Info($"Patch ON ({options.TargetFps} FPS). F8 toggles on/off. Two high beeps = on, one low beep = off.");
+feedback.PatchState(true, startFps);
+Log.Info($"Patch ON ({startFps} FPS). F8 = {Options.PresetF8} FPS, F9 = {Options.PresetF9} FPS; pressing the active key turns the patch off, " +
+    "the other key switches. Two high beeps = 120, three = 240, one low beep = off.");
 Log.Info("Closing this window leaves the game as it is; restarting the game undoes everything.");
 
 var bisection = new Bisection(builder.BisectionCandidates.Select(p => p.Name).ToList());
-int[] keys = options.Diagnostics ? [Keyboard.F8, Keyboard.F7, Keyboard.F5, Keyboard.F6] : [Keyboard.F8];
+int[] keys = options.Diagnostics ? [Keyboard.F8, Keyboard.F9, Keyboard.F7, Keyboard.F5, Keyboard.F6] : [Keyboard.F8, Keyboard.F9];
 int key;
 while ((key = Keyboard.WaitKey(game, keys, LogFrameRate)) != 0)
 {
-    if ((key == Keyboard.F5 || key == Keyboard.F6) && enabled && builder.BisectionCandidates.Count > 0)
+    if (key == Keyboard.F5 || key == Keyboard.F6)
     {
+        if (!enabled || builder.BisectionCandidates.Count == 0) continue; // diagnostics only, never a preset key
         string msg = bisection.Answer(bugGone: key == Keyboard.F5);
         patcher.ForcedCandidates = bisection.Trial;
         patcher.Apply(true);
@@ -147,9 +159,12 @@ while ((key = Keyboard.WaitKey(game, keys, LogFrameRate)) != 0)
         Log.Info(msg);
         continue;
     }
-    enabled = !enabled;
-    patcher.Apply(enabled);
-    feedback.PatchState(enabled, options.TargetFps);
-    Log.Info(enabled ? $"Patch ON ({options.TargetFps} FPS)" : "Patch OFF (original behaviour, 60 FPS)");
+    // F8 / F9: the active preset turns the patch off, the other one switches to it
+    int preset = PresetOf(key);
+    int next = enabled && patcher.TargetFps == preset ? 0 : preset;
+    enabled = next != 0;
+    patcher.Apply(enabled, enabled ? next : null);
+    feedback.PatchState(enabled, patcher.TargetFps);
+    Log.Info(enabled ? $"Patch ON ({patcher.TargetFps} FPS)" : "Patch OFF (original behaviour, 60 FPS)");
 }
 return 0;

@@ -16,8 +16,8 @@ sealed class Options
     /// <summary>Game command line when launched from Steam launch options ("... %command%").</summary>
     public string[]? GameCommand { get; private set; }
 
-    /// <summary>Simulation step in 1/60 s ticks per rendered frame (0.5 at 120 FPS).</summary>
-    public float Step => 60f / TargetFps;
+    /// <summary>Frame rates of the F8 and F9 keys.</summary>
+    public const int PresetF8 = 120, PresetF9 = 240;
 
     /// <summary>Parses the arguments; returns null and an error message when they are invalid.</summary>
     public static Options? Parse(string[] args, out string? error)

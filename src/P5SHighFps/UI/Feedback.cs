@@ -11,7 +11,12 @@ sealed class Feedback(Overlay overlay)
     {
         overlay.Show(on ? $"High FPS patch on: {targetFps} FPS" : "High FPS patch off: original 60 FPS",
             on ? Color.LimeGreen : Color.Gray, gameWindow);
-        if (on) { Console.Beep(1000, 120); Console.Beep(1400, 120); }
+        if (on)
+        {
+            Console.Beep(1000, 120);
+            Console.Beep(1400, 120);
+            if (targetFps >= 240) Console.Beep(1800, 120); // three beeps for the 240 FPS preset
+        }
         else Console.Beep(500, 250);
     }
 

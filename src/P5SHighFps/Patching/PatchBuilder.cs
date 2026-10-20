@@ -56,9 +56,39 @@ sealed class PatchBuilder(RemoteProcess mem, long baseAddr, CodeCave cave)
         if (mem.Read(addr, 6).SequenceEqual(Addresses.MotionTimeOrig))
         {
             Patches.Add(new Patch(addr, Addresses.MotionTimeOrig, [.. Jmp(addr, cave.ShortMotionStub), 0x90], Family.ShortMotions));
-            Log.Info("Short looping motions: time snapped to whole frames.");
+            Log.Info("Short looping motions and effects: time snapped to whole frames.");
         }
         else Log.Info($"  SKIPPED  short motions game.exe+{Addresses.MotionTime:X}: unexpected bytes");
+    }
+
+    /// <summary>Gauge durations scaled by target / 60 (see <see cref="Addresses.GaugeDurationSites"/>).</summary>
+    public void AddGaugeDurations()
+    {
+        int scaled = 0;
+        foreach (var rva in Addresses.GaugeDurationSites)
+        {
+            long addr = baseAddr + rva;
+            if (!mem.Read(addr, 7).SequenceEqual(Addresses.GaugeDurationOrig))
+            {
+                Log.Info($"  SKIPPED  gauge game.exe+{rva:X}: unexpected bytes");
+                continue;
+            }
+            Patches.Add(new Patch(addr, Addresses.GaugeDurationOrig, [.. Call(addr, cave.GaugeStub), 0x66, 0x90], Family.Gauges));
+            scaled++;
+        }
+        Log.Info($"Gauges: {scaled}/{Addresses.GaugeDurationSites.Length} durations scaled by the frame rate.");
+    }
+
+    /// <summary>Lock-on camera: its dead zone is scaled by the step (see <see cref="Addresses.LockOnDeadZone"/>).</summary>
+    public void AddLockOnCamera()
+    {
+        long addr = baseAddr + Addresses.LockOnDeadZone;
+        if (mem.Read(addr, 5).SequenceEqual(Addresses.LockOnDeadZoneOrig))
+        {
+            Patches.Add(new Patch(addr, Addresses.LockOnDeadZoneOrig, Call(addr, cave.LockOnStub), Family.LockOnCamera));
+            Log.Info("Lock-on camera: dead zone scaled by the step.");
+        }
+        else Log.Info($"  SKIPPED  lock-on camera game.exe+{Addresses.LockOnDeadZone:X}: unexpected bytes");
     }
 
     /// <summary>The once-per-frame anchor: frame counting only, or integer ticks as well. False if it does not match.</summary>

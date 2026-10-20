@@ -10,6 +10,8 @@ enum Family
     UiAnimations = 4,
     IntegerCounters = 5,
     ShortMotions = 6,
+    Gauges = 7,
+    LockOnCamera = 8,
 }
 
 /// <summary>One code change: the original bytes (verified before patching) and the bytes that replace them.</summary>
@@ -26,8 +28,10 @@ static class FamilyNames
         Family.UiAnimations => "UI animations",
         Family.IntegerCounters => "integer counters + blinking",
         Family.ShortMotions => "short looping motions",
+        Family.Gauges => "gauge durations",
+        Family.LockOnCamera => "lock-on camera",
         _ => f.ToString(),
     };
 
-    public const int Count = 7;
+    public const int Count = 9;
 }

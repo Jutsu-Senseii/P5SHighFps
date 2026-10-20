@@ -35,10 +35,16 @@ Systems convert the divisor to float (`cvtsi2ss`) to get a step in 1/60 s ticks,
      or a divisor of 0 every other frame) leaves a rate that never moves the gauge: the in-game HP/SP counter stayed
      behind the real value after a fight (the menu was right). Their divisor reads (`70024A`, `7002C4`, `704EBA`,
      `704F34`, `7061CA`, `706244`, `6FAAEA`, `6FAB68`, `6FE75A`, `6FE7D4`) are redirected to the getter returning 1,
-     as at 60 FPS; the gauges animate slightly faster, cosmetic only.
+     as at 60 FPS. The duration is counted in updates, so the gauges also filled twice as fast at 120 FPS (four times at
+     240): the `cvtdq2ps xmm0, xmm0 ; divss xmm6, xmm0` right before each of these reads (`700243`, `7002BD`, `704EB3`,
+     `704F2D`, `7061C3`, `70623D`, `6FAAE3`, `6FAB61`, `6FE753`, `6FE7CD`) is replaced by a call that multiplies the
+     duration by `target / 60`, so they take the same real time as at 60 FPS.
    - **Enemy detection** (`2E6C20`, `2E6C88`): `imul eax, rate` runs between the getter and the conversion. The constant
      dropped the multiplication, the detection gauge filled far too slowly and enemies never ambushed the player.
    - **A counter, not the divisor** (`6DBC9E`): converts `min(counter + divisor, limit)`.
+   - **A whole number of frames** (`14BE2A`): `(int)(divisor * 1.0)` is passed to a unit method (`[vtable+4B0h]`). The
+     step 0.5 truncates to 0, so the method never received a frame. Found by reviewing every patched site for a
+     float-to-integer truncation after the step.
 
    Unpatched, they follow the integer tick sequence (1, 0, 1, 0...), which is correct on average.
 
@@ -65,15 +71,32 @@ Systems convert the divisor to float (`cvtsi2ss`) to get a step in 1/60 s ticks,
    Eye blinking (`115100`) advances `round(step × 60)` frames per update, which is always 1 at 120 FPS: `11511C`
    (`cvttss2si r8d, xmm0`) is replaced by a read of the divisor.
 
-6. **Short looping motions**: the motion time advance at `1FD5D0` (`time += step`, time at `[motion+B8h]`, length
-   at `[motion+114h]`) already contains a branch (`1FD666`) that snaps the time to whole frames and carries the
-   remainder to the next update, used by the engine for some unit types. Motions of 2 frames or less (the Persona
-   showcase pose, looped by restarting it) break when sampled between frames: the scene was drawn misplaced every
-   other frame on the Persona screen. `1FD61E` (`mov ecx,[rax+20h] ; cmp ecx,6Eh`) jumps to a stub that takes the
-   snapping branch for those motions; longer motions are untouched and stay smooth. Found by bisecting the step
-   sites live (`206880`, the per-unit update, receives the step), then logging the vtable calls of the affected unit.
+6. **Motions snapped to whole frames**: the motion time advance at `1FD5D0` (`time += step`, time at `[motion+B8h]`,
+   length at `[motion+114h]`, owner type at `[owner+20h]`) already contains a branch (`1FD666`) that snaps the time
+   to whole frames and carries the remainder to the next update, used by the engine for some unit types. Two cases
+   break when sampled between frames and are routed to that branch by a stub at `1FD61E`:
+   - motions of 2 frames or less (the Persona showcase pose, looped by restarting it): the scene was drawn misplaced
+     every other frame on the Persona screen;
+   - clips of exactly 51 or 81 frames in the pool of owner types 80 to 109 (the characters' motion players; the engine
+     ignores types from 110 up): the spark played when two characters clap hands during a character switch looked
+     doubled (two copies half a frame apart) at 120 FPS. Snapping the whole pool, or clips of 11 to 31 frames, made
+     every character start running with its pose stepping at 60 Hz while the position moved at 120 Hz (about a
+     second, gone when blocked by a wall), so only these two durations are snapped.
 
-About 64 other floating-point conversions of the divisor are left alone; with integer ticks they receive 1/0
+   Everything else keeps a fractional time and stays smooth. Found by bisecting the step sites live (`206880`, the
+   per-unit update, receives the step), then logging the (owner type, length) pairs seen during switches against
+   the idle and running ones and bisecting the durations (`P5SScan` is not needed for this).
+
+7. **Lock-on camera dead zone**: the lock-on camera (`505E90`) turns toward the target each update by an angle limited
+   by a speed that is scaled by the camera step (written at `4FC39F`), then applies a dead zone that is not:
+   `if |angle| < threshold: no turn, else angle -= threshold`. At 240 FPS the angle per update fell below the threshold
+   and the camera never turned toward a new target; at 120 FPS the threshold was removed twice as often and the turn
+   took twice as long. `50623A` (`mulss xmm2, xmm12`, the threshold) becomes a call that also multiplies it by the step.
+   Found by bisecting the step sites live, then a hardware read watchpoint on the camera step to list its readers.
+   Leaving `4FC39F` unpatched instead made the camera update only on ticks (every other frame at 120 FPS), and the
+   reticles shook while the camera followed a locked enemy.
+
+About 65 other floating-point conversions of the divisor are left alone; with integer ticks they receive 1/0
 alternately, which is correct on average. They were not patched by the cheat table either.
 
 ## Code cave
@@ -96,9 +119,16 @@ empty.
 | `+230` / `+234` / `+238` | Constants: 1 (int), 2.0, 0.0 |
 | `+240` | Short motion stub |
 
+## Frame rate presets (F8 / F9)
+
+F8 selects 120 FPS and F9 selects 240 FPS; pressing the active key turns the patch off, pressing the other one switches.
+A switch runs with the game suspended: `CodeCave.Retarget` rewrites the step (`60 / target`), the integer tick stub
+(`div` by the target), the `SetFrameRate` replacement and resets the tick accumulator, then the frame globals
+(divisor, cap int and float) are written. `--fps=N` only selects the frame rate of the automatic activation.
+
 ## Diagnostics (`--diagnostics`)
 
-- **F7** disables one family of fixes at a time (1 → 6, then all on), to find which family causes a problem.
+- **F7** disables one family of fixes at a time (1 → 8, then all on), to find which family causes a problem.
 - **F5 / F6** bisect the ~220 divisor readers: half of the suspects are forced to 1, you answer "bug gone" (F5) or
   "bug present" (F6), and after about 8 answers the log names the culprit. This is how the NPC timers were found.
 

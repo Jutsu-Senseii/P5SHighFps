@@ -9,7 +9,7 @@ namespace P5SHighFps.UI;
 /// </summary>
 static class Keyboard
 {
-    public const int F5 = 0x74, F6 = 0x75, F7 = 0x76, F8 = 0x77;
+    public const int F5 = 0x74, F6 = 0x75, F7 = 0x76, F8 = 0x77, F9 = 0x78;
 
     public static bool IsDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
 
@@ -34,20 +34,26 @@ static class Keyboard
         }
     }
 
-    /// <summary>Waits up to <paramref name="seconds"/>, or less if F8 is pressed. Returns false if the game exits.</summary>
-    public static bool WaitOrF8(Process game, int seconds)
+    /// <summary>
+    /// Waits up to <paramref name="seconds"/>, or less if one of the keys is pressed. Returns the key code, -1 if the
+    /// time ran out, or 0 if the game exits first.
+    /// </summary>
+    public static int WaitKeyOrTimeout(Process game, int[] keys, int seconds)
     {
         var until = DateTime.UtcNow.AddSeconds(seconds);
-        bool wasDown = IsDown(F8);
+        var was = keys.Select(IsDown).ToArray();
         while (DateTime.UtcNow < until)
         {
             Thread.Sleep(30);
-            if (game.HasExited) { Log.Info("The game has exited."); return false; }
-            bool down = IsDown(F8);
-            if (down && !wasDown) break;
-            wasDown = down;
+            if (game.HasExited) { Log.Info("The game has exited."); return 0; }
+            for (int i = 0; i < keys.Length; i++)
+            {
+                bool d = IsDown(keys[i]);
+                if (d && !was[i]) return keys[i];
+                was[i] = d;
+            }
         }
-        return true;
+        return -1;
     }
 
     [DllImport("user32")] static extern short GetAsyncKeyState(int vk);

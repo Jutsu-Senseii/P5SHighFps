@@ -11,7 +11,7 @@ namespace P5SHighFps.Patching;
 /// Layout: +000 step (float) · +008 frame counter (u64) · +010 movss thunks, one per xmm register (0x10 apart) ·
 /// +0B0 tick accumulator (u32) · +100 SetFrameRate replacement · +140 anchor (count only) · +180 anchor (ticks) ·
 /// +1E0 "return 1" getter · +200 blink stub · +210 UI step stub · +230 constant 1 · +234 2.0f · +238 0.0f ·
-/// +240 short motion stub.
+/// +23C target / 60 (float) · +240 short motion stub · +2A0 gauge duration stub · +2C0 lock-on dead zone stub.
 /// </remarks>
 sealed class CodeCave
 {
@@ -33,7 +33,10 @@ sealed class CodeCave
     public long ConstOne => start + 0x230;
     long ShortMotionMax => start + 0x234;
     long FloatZero => start + 0x238;
+    long FpsRatio => start + 0x23C;
     public long ShortMotionStub => start + 0x240;
+    public long GaugeStub => start + 0x2A0;
+    public long LockOnStub => start + 0x2C0;
     public long Thunk(int reg) => start + 0x10 + reg * 0x10;
 
     public CodeCave(RemoteProcess mem, long baseAddr)
@@ -48,16 +51,12 @@ sealed class CodeCave
     public static byte[] Rel32(long from, long target) => BitConverter.GetBytes(checked((int)(target - from)));
 
     /// <summary>Writes every stub and the step value, then keeps the cave page writable for the counters.</summary>
-    public void Write(int targetFps, float step)
+    public void Write(int targetFps)
     {
         foreach (int reg in ThunkRegisters)
             mem.WriteCode(Thunk(reg), MovssThunk(reg));
-        mem.WriteCode(SetFrameRateStub, SetFrameRateReplacement(targetFps));
-        mem.WriteCode(Step, BitConverter.GetBytes(step));
         mem.WriteCode(FrameCount, new byte[8]);
-        mem.WriteCode(TickAccumulator, new byte[4]);
         mem.WriteCode(AnchorCountStub, AnchorCount());
-        mem.WriteCode(AnchorTicksStub, AnchorTicks(targetFps));
         mem.WriteCode(ReturnOneStub, [0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3]); // mov eax, 1 ; ret
         mem.WriteCode(BlinkStub, BlinkFrames());
         mem.WriteCode(UiStepStub, UiStep());
@@ -65,8 +64,24 @@ sealed class CodeCave
         mem.WriteCode(ShortMotionMax, BitConverter.GetBytes(2.0f));
         mem.WriteCode(FloatZero, BitConverter.GetBytes(0.0f));
         mem.WriteCode(ShortMotionStub, ShortMotion());
+        mem.WriteCode(GaugeStub, GaugeDuration());
+        mem.WriteCode(LockOnStub, LockOnDeadZone());
+        Retarget(targetFps);
         // The stubs write the accumulator and counter inside the cave: its page (int3 padding only) must stay writable.
         mem.Protect(start & ~0xFFFL, 0x1000, 0x40);
+    }
+
+    /// <summary>
+    /// Switches the target frame rate: the step (60 / target), the gauge ratio (target / 60), the tick stub and the
+    /// SetFrameRate replacement are rewritten and the tick accumulator is reset. The game must be suspended.
+    /// </summary>
+    public void Retarget(int targetFps)
+    {
+        mem.WriteCode(Step, BitConverter.GetBytes(60f / targetFps));
+        mem.WriteCode(FpsRatio, BitConverter.GetBytes(targetFps / 60f));
+        mem.WriteCode(SetFrameRateStub, SetFrameRateReplacement(targetFps));
+        mem.WriteCode(AnchorTicksStub, AnchorTicks(targetFps));
+        mem.WriteCode(TickAccumulator, new byte[4]);
     }
 
     /// <summary>movss xmmN, [rip+step] ; ret</summary>
@@ -151,24 +166,59 @@ sealed class CodeCave
     }
 
     /// <summary>
-    /// Motions of 2 frames or less take the engine's own "snap time to whole frames" branch.
-    /// movss xmm1,[rbx+114h] (length) ; comiss xmm1,[2.0] ; ja orig ; comiss xmm1,[0.0] ; jbe orig
-    /// movss xmm1,[rbx+0B8h] (time) ; jmp snap
-    /// orig: mov ecx,[rax+20h] ; cmp ecx,6Eh ; jmp continue
+    /// Motions that take the engine's own "snap time to whole frames" branch: clips of exactly 51 or 81 frames in the
+    /// pool of owner types 80 to 109 (the spark of a character switch, see <see cref="Addresses.SnapLength1"/>) and
+    /// motions of 2 frames or less (the Persona showcase pose).
+    /// mov ecx,[rax+20h] (owner type) ; cmp ecx,80 ; jb len2 ; cmp ecx,110 ; jae len2
+    /// push rdx ; cvttss2si edx,[rbx+114h] (length) ; cmp edx,51 ; je yes ; cmp edx,81 ; je yes ; pop rdx
+    /// len2: movss xmm1,[rbx+114h] ; comiss xmm1,[2.0] ; ja orig ; comiss xmm1,[0.0] ; jbe orig
+    /// snap: movss xmm1,[rbx+0B8h] (time) ; jmp snap target
+    /// yes: pop rdx ; jmp snap
+    /// orig: cmp ecx,6Eh ; jmp continue
     /// </summary>
     byte[] ShortMotion()
     {
         long a = ShortMotionStub;
-        var s = new List<byte> { 0xF3, 0x0F, 0x10, 0x8B, 0x14, 0x01, 0x00, 0x00 };
+        var s = new List<byte> { 0x8B, 0x48, 0x20 };
+        s.AddRange([0x83, 0xF9, (byte)Addresses.SnapOwnerTypeFrom, 0x72, 0x19]);  // jb len2
+        s.AddRange([0x83, 0xF9, (byte)Addresses.SnapOwnerTypeTo, 0x73, 0x14]);    // jae len2
+        s.Add(0x52);                                                              // push rdx
+        s.AddRange([0xF3, 0x0F, 0x2C, 0x93, 0x14, 0x01, 0x00, 0x00]);             // cvttss2si edx,[rbx+114h]
+        s.AddRange([0x83, 0xFA, (byte)Addresses.SnapLength1, 0x74, 0x2D]);        // je yes
+        s.AddRange([0x83, 0xFA, (byte)Addresses.SnapLength2, 0x74, 0x28]);        // je yes
+        s.Add(0x5A);                                                              // pop rdx
+        if (s.Count != 33) throw new InvalidOperationException("short motion stub layout (len2)");
+        s.AddRange([0xF3, 0x0F, 0x10, 0x8B, 0x14, 0x01, 0x00, 0x00]);
         s.AddRange([0x0F, 0x2F, 0x0D]); s.AddRange(Rel32(a + s.Count + 4, ShortMotionMax));
-        s.AddRange([0x77, 0x16]);
+        s.AddRange([0x77, 0x19]);                                                 // ja orig
         s.AddRange([0x0F, 0x2F, 0x0D]); s.AddRange(Rel32(a + s.Count + 4, FloatZero));
-        s.AddRange([0x76, 0x0D]);
+        s.AddRange([0x76, 0x10]);                                                 // jbe orig
+        if (s.Count != 59) throw new InvalidOperationException("short motion stub layout (snap)");
         s.AddRange([0xF3, 0x0F, 0x10, 0x8B, 0xB8, 0x00, 0x00, 0x00]);
         s.Add(0xE9); s.AddRange(Rel32(a + s.Count + 4, baseAddr + Addresses.MotionTimeSnap));
-        if (s.Count != 39) throw new InvalidOperationException("short motion stub layout");
-        s.AddRange([0x8B, 0x48, 0x20, 0x83, 0xF9, 0x6E]);
+        if (s.Count != 72) throw new InvalidOperationException("short motion stub layout (yes)");
+        s.AddRange([0x5A, 0xEB, 0xF0]);                                           // yes: pop rdx ; jmp snap
+        if (s.Count != 75) throw new InvalidOperationException("short motion stub layout (orig)");
+        s.AddRange([0x83, 0xF9, 0x6E]);
         s.Add(0xE9); s.AddRange(Rel32(a + s.Count + 4, baseAddr + Addresses.MotionTimeContinue));
+        return s.ToArray();
+    }
+
+    /// <summary>cvtdq2ps xmm0, xmm0 ; mulss xmm0, [target / 60] ; divss xmm6, xmm0 ; ret</summary>
+    byte[] GaugeDuration()
+    {
+        var s = new List<byte> { 0x0F, 0x5B, 0xC0, 0xF3, 0x0F, 0x59, 0x05 };
+        s.AddRange(Rel32(GaugeStub + s.Count + 4, FpsRatio));
+        s.AddRange([0xF3, 0x0F, 0x5E, 0xF0, 0xC3]);
+        return s.ToArray();
+    }
+
+    /// <summary>mulss xmm2, xmm12 ; mulss xmm2, [step] ; ret</summary>
+    byte[] LockOnDeadZone()
+    {
+        var s = new List<byte> { 0xF3, 0x41, 0x0F, 0x59, 0xD4, 0xF3, 0x0F, 0x59, 0x15 };
+        s.AddRange(Rel32(LockOnStub + s.Count + 4, Step));
+        s.Add(0xC3);
         return s.ToArray();
     }
 }

@@ -5,33 +5,38 @@ makes everything run faster. **P5SHighFps** patches the game in memory so it ren
 while gameplay, animations, timers and UI keep their normal speed.
 
 - 120 FPS (configurable) with correct game speed
-- Fixes what breaks when the frame rate is simply unlocked (full list below)
+- Handles the systems that need special care to keep the normal speed above 60 FPS (full list below)
 - Nothing on disk is modified: it patches memory and verifies every instruction before touching it
-- F8 toggles 120 FPS / original 60 FPS at any time, with an on-screen notification and beeps
+- **F8** switches to 120 FPS and **F9** to 240 FPS at any time, and pressing the active key turns the patch off (original
+  60 FPS), with an on-screen notification and beeps
 - Starts automatically with the game through Steam launch options
 
 | Patch off: original 60 FPS | Patch on: 120 FPS |
 |---|---|
 | ![Persona 5 Strikers at the original 60 FPS](docs/images/60fps.jpg) | ![Persona 5 Strikers at 120 FPS with P5SHighFps](docs/images/120fps.jpg) |
 
-Same scene, toggled in game with F8. The banner at the top is the patcher's notification; the counter in the top-right
+Same scene, switched in game with F8. The banner at the top is the patcher's notification; the counter in the top-right
 corner is an external FPS overlay.
 
-Other targets work too (`--fps=N`, 30 to 360). Tested at 120 and 240 FPS; here at 240 FPS (`--fps=240`):
+Tested at 120 FPS (F8) and 240 FPS (F9); other targets work too (`--fps=N`, 30 to 360). Here at 240 FPS:
 
 ![Persona 5 Strikers at 240 FPS with P5SHighFps](docs/images/240fps.jpg)
 
-## Fixes included
+## Special cases handled
 
-The game logic is tied to the frame rate, so a plain unlocker breaks many small things. These are fixed:
+The game logic is tied to the frame rate: raising the cap alone makes everything run too fast. Keeping the normal speed means rescaling the time step of hundreds of systems, and some of them need special handling. These cases are handled:
 
 - Eye blinking at its normal speed (not twice as fast)
 - Dialogue bubbles, exclamation marks and other UI animations at their normal speed
 - NPCs no longer disappear depending on the camera angle
 - Morgana's van summon no longer freezes the game
 - The Persona model no longer flickers or jumps between two positions on the Persona screen
+- The spark effect of a character switch (when the two characters clap hands) is sharp, not doubled
 - Zipline cables: you no longer slide off them
 - The in-game HP/SP counters update after a fight (they used to stay behind the real value until a character switch)
+- HP/SP gauges fill and drain at their normal speed
+- When you switch lock-on targets, the camera turns toward the new target at its normal speed (it did not turn at all at
+  240 FPS)
 - Enemies can ambush you again (an enemy next to you no longer just stares at you)
 
 ## Requirements
@@ -61,11 +66,13 @@ The game logic is tied to the frame rate, so a plain unlocker breaks many small 
    (needed for the on-screen notification; beeps work in any mode).
 
 > [!IMPORTANT]
-> **V-Sync must be off** in the game options. With V-Sync on, the game waits for the display and cannot hold the
-> target frame rate, and every missed frame slows the game down. G-Sync / FreeSync and a display refresh rate at
-> or above the target (120 Hz or more) are fine.
+> **V-Sync must be off in the game options** (the in-game setting only). With it on, the game waits for the display and
+> cannot hold the target frame rate, and every missed frame slows the game down. Forcing V-Sync from the NVIDIA App
+> or NVIDIA Profile Inspector is fine, and so are G-Sync / FreeSync, as long as the display refresh rate is at or above
+> the target (120 Hz or more).
 5. Launch the game from Steam. A console window opens next to the game; after 30 seconds you hear two high beeps and
-   see a green "High FPS patch on" banner. Leave the console window open; it closes with the game.
+   see a green "High FPS patch on" banner. Leave the console window open; it closes with the game. Press **F9** at any
+   time to go to 240 FPS.
 
 To uninstall, clear the launch options. Nothing else was changed.
 
@@ -83,16 +90,18 @@ The result must match the hash published with the release (`SHA256SUMS.txt`).
 
 | Key | Action |
 |---|---|
-| **F8** | Toggle the patch: 120 FPS (two high beeps, green banner) ↔ original 60 FPS (one low beep, grey banner) |
+| **F8** | 120 FPS (two high beeps, green banner). Press it again while at 120 FPS to turn the patch off |
+| **F9** | 240 FPS (three high beeps, green banner). Press it again while at 240 FPS to turn the patch off |
 
-The game pauses when it loses focus, so keys are read globally while the game window is active. Only F8 is used.
+Pressing the other key switches directly between 120 and 240 FPS. Turning the patch off gives the original 60 FPS (one
+low beep, grey banner). The game pauses when it loses focus, so keys are read globally while the game window is active.
 
 ### Options
 
 | Option | Effect |
 |---|---|
-| `--auto=SECONDS` | Activate automatically SECONDS after the game starts (otherwise press F8 once in game) |
-| `--fps=N` | Target frame rate, 30 to 360 (default 120). Tested at 120 and 240. |
+| `--auto=SECONDS` | Activate automatically SECONDS after the game starts (F8 or F9 activate sooner; without this option, press F8 or F9 once in game) |
+| `--fps=N` | Frame rate of the automatic activation, 30 to 360 (default 120). F8 and F9 always select 120 and 240. |
 | `--no-int-ticks` | Disable the integer counter fixes (eye blinking, integer timers); only for troubleshooting |
 | `--now` | Patch immediately when started manually on an already running game |
 | `--diagnostics` | Developer diagnostics on F5/F6/F7 (see [docs/TECHNICAL.md](docs/TECHNICAL.md)) |
@@ -104,7 +113,8 @@ The game pauses when it loses focus, so keys are read globally while the game wi
 - **The game runs in slow motion**: turn V-Sync off in the game options, and check that your PC holds the target
   frame rate (the log reports the actual rate every 5 seconds as `frames: 120.0/s`).
 - **No banner but beeps work**: the game runs in exclusive fullscreen; switch to borderless.
-- **Something looks too fast or too slow**: press F8 to compare with the original behaviour, then open an issue with
+- **Something looks too fast or too slow**: press the active key (F8 at 120 FPS, F9 at 240 FPS) to compare with the original
+  behaviour, then open an issue with
   `P5SHighFps.log` and a description of where it happens.
 - **Antivirus warning**: the patcher opens the game process and writes to its memory, which some antivirus
   heuristics flag. The full source code is in this repository; you can build it yourself (see below) and compare the
@@ -113,9 +123,11 @@ The game pauses when it loses focus, so keys are read globally while the game wi
 A healthy log contains lines like:
 
 ```
-70/70 simulation step sites verified.
+69/69 simulation step sites verified.
 UI fixed-step animations: step scaled.
-Short looping motions: time snapped to whole frames.
+Short looping motions and effects: time snapped to whole frames.
+Gauges: 10/10 durations scaled by the frame rate.
+Lock-on camera: dead zone scaled by the step.
 Integer counters: 34/34 calls redirected to a fixed divisor of 1.
 Eye blinking: frame step replaced by the divisor.
 ```

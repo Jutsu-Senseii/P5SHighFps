@@ -38,6 +38,14 @@ static class Addresses
     // other frame. "mov ecx,[rax+20h] ; cmp ecx,6Eh" becomes a jump to a stub that takes the snapping branch for them.
     public const long MotionTime = 0x1FD61E, MotionTimeSnap = 0x1FD666, MotionTimeContinue = 0x1FD624;
     public static readonly byte[] MotionTimeOrig = [0x8B, 0x48, 0x20, 0x83, 0xF9, 0x6E];
+    // The spark played when two characters clap hands during a character switch looked doubled (two copies half a frame
+    // apart) at 120 FPS. The characters' own motions live in a pool of owner types ([owner+20h]) from 80 up (the engine
+    // ignores 110 and up); during a switch their players run clips of 11 to 81 frames. Snapping the whole pool, or
+    // clips of 11 to 31 frames, made every character start running with the pose stepping at 60 Hz while the position
+    // moved at 120 Hz (visible for about a second, gone when blocked by a wall). Only the clips of exactly 51 and 81
+    // frames are needed for the spark and are not used when starting to run. Found by bisecting the durations live.
+    public const int SnapOwnerTypeFrom = 80, SnapOwnerTypeTo = 110;
+    public const int SnapLength1 = 51, SnapLength2 = 81;
 
     // Direct reads of the divisor (diagnostics only): sub edx,[divisor] ; mov r11d,[divisor]
     public const long DirectRead1 = 0x5B5A2C, DirectRead2 = 0x5B64A0;
@@ -54,10 +62,13 @@ static class Addresses
     //    value = (int)(value + rate). The rate is computed once, while it is 0, and the value is truncated to an integer
     //    on every update: a floor below 1 (0.5, or a divisor of 0 on every other frame) leaves a rate that never moves
     //    the gauge, so the on-screen HP/SP stayed behind the real value. Their divisor reads are redirected to a getter
-    //    returning 1 (FixedOneSites), the original 60 FPS behaviour: gauges animate a little faster, cosmetic only.
+    //    returning 1 (FixedOneSites), the original 60 FPS behaviour, and their duration is scaled by target / 60
+    //    (GaugeDurationSites) so that they take the same real time as at 60 FPS.
     //  - 2E6C20, 2E6C88: "imul eax, rate" runs before the conversion (enemy detection gauge). The constant dropped the
     //    multiplication, the gauge filled far too slowly and enemies never ambushed the player.
     //  - 6DBC9E: converts a counter (min(counter + divisor, limit)), not the divisor.
+    //  - 14BE2A: (int)(divisor * 1.0) is passed to a unit method ([vtable+4B0h]) as a whole number of frames; the step
+    //    0.5 truncates to 0, so the method never received 1 (found by reviewing every patched site for a truncation).
     // Unpatched, they follow the integer tick sequence (1, 0, 1, 0...), which is correct on average.
 
     /// <summary>
@@ -67,7 +78,7 @@ static class Addresses
     /// </summary>
     public static readonly (int Reg, long[] Rvas)[] StepSites =
     [
-        (0, [0x5BCD26, 0x18967C, 0x4FC39F, 0x455099, 0x419839, 0x14BE2A, 0x189448,
+        (0, [0x5BCD26, 0x18967C, 0x4FC39F, 0x455099, 0x419839, 0x189448,
              0x3C2033, 0x835E0D, 0x6D70FE, 0x6D708B, 0x1FA410, 0x1AE843,
              0x6ECAF2, 0x6EE2B5, 0x6E5097, 0x6E50D1, 0x6E506B,
              // .trace section sites relocated in v1.03 (the cheat table's 2B55BBC/2B80956/3AA520F do not match)
@@ -95,6 +106,23 @@ static class Addresses
         (8, [0x5C3AFD, 0x4F5BDA]),
         (9, [0x5C3ADF]),
     ];
+
+    /// <summary>
+    /// Gauge durations: "cvtdq2ps xmm0, xmm0 ; divss xmm6, xmm0" (rate = gap / duration in updates) right before the
+    /// gauge floor reads of <see cref="FixedOneSites"/>. Replaced by a call that multiplies the duration by target / 60.
+    /// </summary>
+    public static readonly long[] GaugeDurationSites =
+        [0x700243, 0x7002BD, 0x704EB3, 0x704F2D, 0x7061C3, 0x70623D, 0x6FAAE3, 0x6FAB61, 0x6FE753, 0x6FE7CD];
+    public static readonly byte[] GaugeDurationOrig = [0x0F, 0x5B, 0xC0, 0xF3, 0x0F, 0x5E, 0xF0];
+
+    // Lock-on camera (game.exe+505E90): each update turns the camera toward the locked target by an angle limited by a
+    // speed scaled by the step, then applies a dead zone that is not: "if |angle| < threshold, do not turn, otherwise
+    // angle -= threshold". At 240 FPS the angle per update fell below the threshold and the camera never turned toward a
+    // new target; at 120 FPS the threshold was removed twice as often and the turn took twice as long. The threshold
+    // "mulss xmm2, xmm12" becomes a call that also multiplies it by the step. Found by bisection (the camera step written
+    // at 4FC39F) and a read watchpoint on that step.
+    public const long LockOnDeadZone = 0x50623A;
+    public static readonly byte[] LockOnDeadZoneOrig = [0xF3, 0x41, 0x0F, 0x59, 0xD4];
 
     /// <summary>Step sites in the .trace section, relocated for v1.03 (their own diagnostics family).</summary>
     public static readonly long[] RelocatedTraceSites = [0x2BB351C, 0x2BE0236, 0x356C1F6, 0x19597532, 0x1967F748];
